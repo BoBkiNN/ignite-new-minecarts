@@ -1,9 +1,5 @@
-/*
- * Decompiled with CFR 0.2.2 (FabricMC 7c48b8c4).
- */
 package xyz.bobkinn.minecarts
 
-import com.google.common.collect.Iterables
 import io.netty.buffer.ByteBuf
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Vec3i
@@ -15,7 +11,6 @@ import net.minecraft.util.Mth
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.MoverType
 import net.minecraft.world.entity.vehicle.AbstractMinecart
-import net.minecraft.world.level.GameRules
 import net.minecraft.world.level.block.BaseRailBlock
 import net.minecraft.world.level.block.Blocks
 import net.minecraft.world.level.block.PoweredRailBlock
@@ -24,14 +19,13 @@ import net.minecraft.world.level.block.state.properties.RailShape
 import net.minecraft.world.phys.Vec3
 import xyz.bobkinn.minecarts.mixin.EntityAccessor
 import xyz.bobkinn.minecarts.mixin.MinecartAccessor
-import xyz.bobkinn.minecarts.mixin.MixinAbstractMinecart
 import java.util.*
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.min
 
-class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin: MixinAbstractMinecart) : MinecartBehavior(abstractMinecart) {
+class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior(abstractMinecart) {
     private var cacheIndexAlpha: StepPartialTicks? = null
     private var cachedLerpDelay = 0
     private var cachedPartialTick = 0f
@@ -97,6 +91,50 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin:
             blockState2.block.stepOn(this.level(), blockPos, blockState2, this)
         }
     }
+
+    private fun applyNaturalSlowdown(cart: AbstractMinecart, vec3: Vec3): Vec3 {
+        val d: Double = slowdownFactor
+        var vec32 = vec3.multiply(d, 0.0, d)
+        if (cart.isInWater) {
+            vec32 = vec32.scale(0.95)
+        }
+        return vec32
+    }
+
+    var passengerMoveIntent2: Vec3 = Vec3.ZERO
+
+    private var AbstractMinecart.passengerMoveIntent: Vec3
+        get() = passengerMoveIntent2
+        set(vec) {
+            passengerMoveIntent2
+        }
+
+    private fun AbstractMinecart.getRedstoneDirection(blockPos: BlockPos): Vec3 {
+        val blockState = level().getBlockState(blockPos)
+        if (!blockState.`is`(Blocks.POWERED_RAIL) || !blockState.getValue(PoweredRailBlock.POWERED)) {
+            return Vec3.ZERO
+        }
+        val accessor = this as MinecartAccessor
+        val railShape = blockState.getValue((blockState.block as BaseRailBlock).shapeProperty)
+        if (railShape == RailShape.EAST_WEST) {
+            if (accessor.invokeIsRedstoneConductor(blockPos.west())) {
+                return Vec3(1.0, 0.0, 0.0)
+            }
+            if (accessor.invokeIsRedstoneConductor(blockPos.east())) {
+                return Vec3(-1.0, 0.0, 0.0)
+            }
+        } else if (railShape == RailShape.NORTH_SOUTH) {
+            if (accessor.invokeIsRedstoneConductor(blockPos.north())) {
+                return Vec3(0.0, 0.0, 1.0)
+            }
+            if (accessor.invokeIsRedstoneConductor(blockPos.south())) {
+                return Vec3(0.0, 0.0, -1.0)
+            }
+        }
+        return Vec3.ZERO
+    }
+
+
 
     override fun tick() {
         if (level().isClientSide) {
@@ -305,31 +343,41 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin:
         var vec33: Vec3
         var vec332: Vec3
         var vec32 = vec3
-        if (!trackIteration.hasGainedSlopeSpeed && calculateSlopeSpeed(vec32, railShape).also { vec332 = it }
-                .horizontalDistanceSqr() != vec32.horizontalDistanceSqr()) {
-            trackIteration.hasGainedSlopeSpeed = true
-            vec32 = it;
+        if (!trackIteration.hasGainedSlopeSpeed) {
+            val speed = calculateSlopeSpeed(vec32, railShape)
+            if (speed.horizontalDistanceSqr() != vec32.horizontalDistanceSqr()) {
+                trackIteration.hasGainedSlopeSpeed = true
+                vec32 = speed;
+            }
         }
-        if (trackIteration.firstIteration && calculatePlayerInputSpeed(vec32).also { vec332 = it }
-                .horizontalDistanceSqr() != vec32.horizontalDistanceSqr()) {
-            trackIteration.hasHalted = true
-            vec32 = vec332
+        if (trackIteration.firstIteration) {
+            val speed = calculatePlayerInputSpeed(vec32)
+            if (speed.horizontalDistanceSqr() != vec32.horizontalDistanceSqr()) {
+                trackIteration.hasHalted = true
+                vec32 = speed
+            }
         }
-        if (!trackIteration.hasHalted && calculateHaltTrackSpeed(vec32, blockState).also { vec332 = it }
-                .horizontalDistanceSqr() != vec32.horizontalDistanceSqr()) {
-            trackIteration.hasHalted = true
-            vec32 = vec332
+        if (!trackIteration.hasHalted) {
+            val speed = calculateHaltTrackSpeed(vec32, blockState)
+            if (speed.horizontalDistanceSqr() != vec32.horizontalDistanceSqr()) {
+                trackIteration.hasHalted = true
+                vec32 = speed
+            }
         }
-//        if (trackIteration.firstIteration && minecart.applyNaturalSlowdown().also { vec32 }
-//                .lengthSqr() > 0.0) {
-//            val d = min(vec32.length(), minecart.getMaxSpeed())
-//            vec32 = vec32.normalize().scale(d)
-//        }
-//        if (!trackIteration.hasBoosted && calculateBoostTrackSpeed(vec32, blockPos, blockState).also { vec33 = it }
-//                .horizontalDistanceSqr() != vec32.horizontalDistanceSqr()) {
-//            trackIteration.hasBoosted = true
-//            vec32 = vec33
-//        }
+        if (trackIteration.firstIteration) {
+            vec32 = applyNaturalSlowdown(minecart, vec32)
+            if (vec32.lengthSqr() > 0.0) {
+                val d = min(vec32.length(), maxSpeed)
+                vec32 = vec32.normalize().scale(d)
+            }
+        }
+        if (!trackIteration.hasBoosted) {
+            val speed = calculateBoostTrackSpeed(vec32, blockPos, blockState)
+            if (speed.horizontalDistanceSqr() != vec32.horizontalDistanceSqr()) {
+                trackIteration.hasBoosted = true
+                vec32 = speed
+            }
+        }
         return vec32
     }
 
@@ -349,7 +397,7 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin:
 
     private fun calculatePlayerInputSpeed(vec3: Vec3): Vec3 {
         val entity = minecart.firstPassenger
-        val vec32: Vec3 = minecart.getPassengerMoveIntent()
+        val vec32: Vec3 = minecart.passengerMoveIntent
         if (entity is ServerPlayer && vec32.lengthSqr() > 0.0) {
             val vec33 = vec32.normalize()
             val d = vec3.horizontalDistanceSqr()
@@ -357,7 +405,7 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin:
                 return vec3.add(Vec3(vec33.x, 0.0, vec33.z).normalize().scale(0.001))
             }
         } else {
-            minecart.setPassengerMoveIntent(Vec3.ZERO)
+            minecart.passengerMoveIntent = Vec3.ZERO
         }
         return vec3
     }
@@ -392,7 +440,7 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin:
             return 0.0
         }
         val vec3 = this.position()
-        val pair = AbstractMinecart.exits(railShape)
+        val pair = MinecartAccessor.invokeExits(railShape)
         val vec3i = pair.first
         val vec3i2 = pair.second
         var vec32: Vec3 = this.deltaMovement.horizontal()
@@ -401,8 +449,8 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin:
             return 0.0
         }
         val bl = vec3i.y != vec3i2.y
-        val vec33: Vec3 = Vec3(vec3i2).scale(0.5).horizontal()
-        var vec34: Vec3 = Vec3(vec3i).scale(0.5).horizontal()
+        val vec33: Vec3 = vec3i2.toVec().scale(0.5).horizontal()
+        var vec34: Vec3 = vec3i.toVec().scale(0.5).horizontal()
         if (vec32.dot(vec34) < vec32.dot(vec33)) {
             vec34 = vec33
         }
@@ -434,7 +482,7 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin:
     }
 
     override fun getMaxSpeed(): Double {
-        return level().gameRules.getInt(GameRules.RULE_MINECART_MAX_SPEED)
+        return level().gameRules.getInt(CustomGameRule.RULE_MINECART_MAX_SPEED)
             .toDouble() * (if (minecart.isInWater) 0.5 else 1.0) / 20.0
     }
 
@@ -485,13 +533,13 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin:
         val weight: Float
     ) {
         companion object {
-            val ROTATION_STREAM_CODEC: StreamCodec<ByteBuf, Float> =
+            private val ROTATION_STREAM_CODEC: StreamCodec<ByteBuf, Float> =
                 ByteBufCodecs.BYTE.map({ b: Byte -> uncompressRotation(b) }, { f: Float -> compressRotation(f) })
             val STREAM_CODEC: StreamCodec<ByteBuf, MinecartStep> =
-                StreamCodec.composite<ByteBuf, MinecartStep, Vec3, Vec3, Float, Float, Float>(
-                    Vec3.STREAM_CODEC,
+                StreamCodec.composite(
+                    VEC3_STREAM_CODEC,
                     MinecartStep::position,
-                    Vec3.STREAM_CODEC,
+                    VEC3_STREAM_CODEC,
                     MinecartStep::movement,
                     ROTATION_STREAM_CODEC,
                     MinecartStep::yRot,
@@ -544,6 +592,18 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart, private val mixin:
         const val ON_RAIL_Y_OFFSET: Double = 0.1
         fun lerp(d: Double, vec3: Vec3, vec32: Vec3): Vec3 {
             return Vec3(Mth.lerp(d, vec3.x, vec32.x), Mth.lerp(d, vec3.y, vec32.y), Mth.lerp(d, vec3.z, vec32.z))
+        }
+
+        val VEC3_STREAM_CODEC: StreamCodec<ByteBuf, Vec3> = object : StreamCodec<ByteBuf, Vec3> {
+            override fun decode(buf: ByteBuf): Vec3 {
+                return Vec3(buf.readDouble(), buf.readDouble(), buf.readDouble())
+            }
+
+            override fun encode(buf: ByteBuf, vec3: Vec3) {
+                buf.writeDouble(vec3.x)
+                buf.writeDouble(vec3.y)
+                buf.writeDouble(vec3.z)
+            }
         }
     }
 }

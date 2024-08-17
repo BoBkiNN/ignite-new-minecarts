@@ -26,9 +26,9 @@ dependencies {
 
     remapper("net.fabricmc:tiny-remapper:0.10.1:fat")
 
-    @Suppress("UNUSED_VARIABLE")
     val include = configurations.create("include")
     // We can use "include" configuration to add dependencies that will be included to jar
+    include("org.jetbrains.kotlin:kotlin-stdlib:2.0.10")
 
     configurations.implementation.extendsFrom(configurations.named("include"))
 

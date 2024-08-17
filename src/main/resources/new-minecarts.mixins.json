@@ -5,8 +5,12 @@
   "compatibilityLevel": "JAVA_17",
   "mixins": [
     "EntityAccessor",
+    "GameRuleIntegerValueAccessor",
+    "GameRulesAccessor",
     "MinecartAccessor",
-    "MixinAbstractMinecart"
+    "MixinAbstractMinecart",
+    "MixinGameRules",
+    "MixinServerGamePacketListenerImpl"
   ],
   "injectors": {
     "defaultRequire": 1
