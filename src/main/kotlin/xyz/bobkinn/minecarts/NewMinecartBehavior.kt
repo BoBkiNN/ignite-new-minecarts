@@ -1,5 +1,6 @@
 package xyz.bobkinn.minecarts
 
+import com.mojang.logging.LogUtils
 import io.netty.buffer.ByteBuf
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Vec3i
@@ -11,6 +12,7 @@ import net.minecraft.util.Mth
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.MoverType
 import net.minecraft.world.entity.vehicle.AbstractMinecart
+import net.minecraft.world.entity.vehicle.MinecartFurnace
 import net.minecraft.world.level.block.BaseRailBlock
 import net.minecraft.world.level.block.Blocks
 import net.minecraft.world.level.block.PoweredRailBlock
@@ -20,20 +22,17 @@ import net.minecraft.world.phys.Vec3
 import xyz.bobkinn.minecarts.mixin.EntityAccessor
 import xyz.bobkinn.minecarts.mixin.MinecartAccessor
 import java.util.*
-import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.max
-import kotlin.math.min
+import kotlin.math.*
 
 class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior(abstractMinecart) {
     private var cacheIndexAlpha: StepPartialTicks? = null
     private var cachedLerpDelay = 0
     private var cachedPartialTick = 0f
     private var lerpDelay = 0
-    val lerpSteps: MutableList<MinecartStep> = LinkedList()
-    val currentLerpSteps: MutableList<MinecartStep> = LinkedList()
-    var currentLerpStepsTotalWeight: Double = 0.0
-    var oldLerp: MinecartStep = MinecartStep.ZERO
+    private val lerpSteps: MutableList<MinecartStep> = LinkedList()
+    private val currentLerpSteps: MutableList<MinecartStep> = LinkedList()
+    private var currentLerpStepsTotalWeight: Double = 0.0
+    private var oldLerp: MinecartStep = MinecartStep.ZERO
     private var firstTick = true
 
     private val accessor = abstractMinecart as MinecartAccessor
@@ -93,9 +92,33 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
     }
 
     private fun applyNaturalSlowdown(cart: AbstractMinecart, vec3: Vec3): Vec3 {
+        if (cart is MinecartFurnace) {
+            return cart.applyNaturalSlowdown(vec3)
+        }
         val d: Double = slowdownFactor
         var vec32 = vec3.multiply(d, 0.0, d)
         if (cart.isInWater) {
+            vec32 = vec32.scale(0.95)
+        }
+        return vec32
+    }
+
+    private fun MinecartFurnace.applyNaturalSlowdown(vec3: Vec3): Vec3 {
+        var vec32: Vec3
+        var d: Double = this.xPush * this.xPush + this.zPush * this.zPush
+        if (d > 1.0E-7) {
+            d = sqrt(d)
+            this.xPush /= d
+            this.zPush /= d
+            vec32 = vec3.multiply(0.8, 0.0, 0.8).add(this.xPush, 0.0, this.zPush)
+            if (this.isInWater) {
+                vec32 = vec32.scale(0.1)
+            }
+        } else {
+            vec32 = vec3.multiply(0.98, 0.0, 0.98)
+        }
+        vec32 = vec3.multiply(d, 0.0, slowdownFactor)
+        if (this.isInWater) {
             vec32 = vec32.scale(0.95)
         }
         return vec32
@@ -106,7 +129,7 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
     private var AbstractMinecart.passengerMoveIntent: Vec3
         get() = passengerMoveIntent2
         set(vec) {
-            passengerMoveIntent2
+            passengerMoveIntent2 = vec
         }
 
     private fun AbstractMinecart.getRedstoneDirection(blockPos: BlockPos): Vec3 {
@@ -135,7 +158,6 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
     }
 
 
-
     override fun tick() {
         if (level().isClientSide) {
             this.lerpClientPositionAndRotation()
@@ -145,14 +167,15 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
             this.firstTick = false
             return
         }
-        val blockPos = minecart.getCurrentBlockPos();
+        val blockPos = minecart.getCurrentBlockPos()
         val blockState = level().getBlockState(blockPos)
         if (this.firstTick) {
             accessor.setOnRails(BaseRailBlock.isRail(blockState))
             this.adjustToRails(blockPos, blockState)
         }
         entityAccessor.invokeApplyGravity()
-        moveAlongTrack()
+
+        minecart.moveAlongTrack()
         this.firstTick = false
     }
 
@@ -188,26 +211,22 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
 
     private fun getCartLerpXRot(f: Float): Float {
         val stepPartialTicks = this.getCurrentLerpStep(f)
-        return Mth.rotLerp(stepPartialTicks!!.partialTicksInStep, stepPartialTicks.previousStep.xRot, stepPartialTicks.currentStep.xRot
-        )
+        return Mth.rotLerp(stepPartialTicks!!.partialTicksInStep, stepPartialTicks.previousStep.xRot, stepPartialTicks.currentStep.xRot)
     }
 
     private fun getCartLerpYRot(f: Float): Float {
         val stepPartialTicks = this.getCurrentLerpStep(f)
-        return Mth.rotLerp(stepPartialTicks!!.partialTicksInStep, stepPartialTicks.previousStep.yRot, stepPartialTicks.currentStep.yRot
-        )
+        return Mth.rotLerp(stepPartialTicks!!.partialTicksInStep, stepPartialTicks.previousStep.yRot, stepPartialTicks.currentStep.yRot)
     }
 
     private fun getCartLerpPosition(f: Float): Vec3 {
         val stepPartialTicks = this.getCurrentLerpStep(f)
-        return lerp(stepPartialTicks!!.partialTicksInStep.toDouble(), stepPartialTicks.previousStep.position, stepPartialTicks.currentStep.position
-        )
+        return lerp(stepPartialTicks!!.partialTicksInStep.toDouble(), stepPartialTicks.previousStep.position, stepPartialTicks.currentStep.position)
     }
 
     private fun getCartLerpMovements(f: Float): Vec3 {
         val stepPartialTicks = this.getCurrentLerpStep(f)
-        return lerp(stepPartialTicks!!.partialTicksInStep.toDouble(), stepPartialTicks.previousStep.movement, stepPartialTicks.currentStep.movement
-        )
+        return lerp(stepPartialTicks!!.partialTicksInStep.toDouble(), stepPartialTicks.previousStep.movement, stepPartialTicks.currentStep.movement)
     }
 
     private fun getCurrentLerpStep(f: Float): StepPartialTicks? {
@@ -278,7 +297,7 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
     override fun moveAlongTrack() {
         val trackIteration = TrackIteration()
         while (trackIteration.shouldIterate()) {
-            val blockPos = minecart.getCurrentBlockPos();
+            val blockPos = minecart.getCurrentBlockPos()
             val blockState = level().getBlockState(blockPos)
             val bl = BaseRailBlock.isRail(blockState)
             if (minecart.isOnRails != bl) {
@@ -340,8 +359,6 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
         blockState: BlockState,
         railShape: RailShape
     ): Vec3 {
-        var vec33: Vec3
-        var vec332: Vec3
         var vec32 = vec3
         if (!trackIteration.hasGainedSlopeSpeed) {
             val speed = calculateSlopeSpeed(vec32, railShape)
@@ -434,8 +451,8 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
         return vec32.scale(vec3.length() + 0.2)
     }
 
-    override fun stepAlongTrack(blockPos: BlockPos, railShape: RailShape, d: Double): Double {
-        var d = d
+    override fun stepAlongTrack(blockPos: BlockPos, railShape: RailShape, movementLeft: Double): Double {
+        var d = movementLeft
         if (d < 1.0E-5) {
             return 0.0
         }
@@ -455,7 +472,7 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
             vec34 = vec33
         }
         var vec35: Vec3 = blockPos.getBottomCenter().add(vec34).add(0.0, 0.1, 0.0).add(vec34.normalize().scale(1.0E-5))
-        if (bl && !this.isDecending(vec32, railShape)) {
+        if (bl && !this.isDescending(vec32, railShape)) {
             vec35 = vec35.add(0.0, 1.0, 0.0)
         }
         val vec36 = vec35.subtract(this.position()).normalize()
@@ -486,36 +503,12 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
             .toDouble() * (if (minecart.isInWater) 0.5 else 1.0) / 20.0
     }
 
-    private fun isDecending(vec3: Vec3, railShape: RailShape): Boolean {
+    private fun isDescending(vec3: Vec3, railShape: RailShape): Boolean {
         return when (railShape) {
-            RailShape.ASCENDING_EAST -> {
-                if (vec3.x < 0.0) {
-                    true
-                }
-                false
-            }
-
-            RailShape.ASCENDING_WEST -> {
-                if (vec3.x > 0.0) {
-                    true
-                }
-                false
-            }
-
-            RailShape.ASCENDING_NORTH -> {
-                if (vec3.z > 0.0) {
-                    true
-                }
-                false
-            }
-
-            RailShape.ASCENDING_SOUTH -> {
-                if (vec3.z < 0.0) {
-                    true
-                }
-                false
-            }
-
+            RailShape.ASCENDING_EAST -> vec3.x < 0.0
+            RailShape.ASCENDING_WEST -> vec3.x > 0.0
+            RailShape.ASCENDING_NORTH -> vec3.z > 0.0
+            RailShape.ASCENDING_SOUTH -> vec3.z < 0.0
             else -> false
         }
     }
@@ -536,25 +529,13 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
             private val ROTATION_STREAM_CODEC: StreamCodec<ByteBuf, Float> =
                 ByteBufCodecs.BYTE.map({ b: Byte -> uncompressRotation(b) }, { f: Float -> compressRotation(f) })
             val STREAM_CODEC: StreamCodec<ByteBuf, MinecartStep> =
-                StreamCodec.composite(
-                    VEC3_STREAM_CODEC,
-                    MinecartStep::position,
-                    VEC3_STREAM_CODEC,
-                    MinecartStep::movement,
-                    ROTATION_STREAM_CODEC,
-                    MinecartStep::yRot,
-                    ROTATION_STREAM_CODEC,
-                    MinecartStep::xRot,
-                    ByteBufCodecs.FLOAT,
-                    MinecartStep::weight
+                StreamCodec.composite(VEC3_STREAM_CODEC, MinecartStep::position,
+                    VEC3_STREAM_CODEC, MinecartStep::movement,
+                    ROTATION_STREAM_CODEC, MinecartStep::yRot,
+                    ROTATION_STREAM_CODEC, MinecartStep::xRot,
+                    ByteBufCodecs.FLOAT, MinecartStep::weight
                 ) { position: Vec3, movement: Vec3, yRot: Float, xRot: Float, weight: Float ->
-                    MinecartStep(
-                        position,
-                        movement,
-                        yRot,
-                        xRot,
-                        weight
-                    )
+                    MinecartStep(position, movement, yRot, xRot, weight)
                 }
             var ZERO: MinecartStep = MinecartStep(Vec3.ZERO, Vec3.ZERO, 0.0f, 0.0f, 0.0f)
 
@@ -588,6 +569,8 @@ class NewMinecartBehavior(abstractMinecart: AbstractMinecart) : MinecartBehavior
     }
 
     companion object {
+        val LOGGER = LogUtils.getClassLogger()
+
         const val POS_ROT_LERP_TICKS: Int = 3
         const val ON_RAIL_Y_OFFSET: Double = 0.1
         fun lerp(d: Double, vec3: Vec3, vec32: Vec3): Vec3 {

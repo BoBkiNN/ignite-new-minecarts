@@ -1,9 +1,11 @@
 package xyz.bobkinn.minecarts.mixin;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.vehicle.AbstractMinecart;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -44,6 +46,12 @@ public class MixinAbstractMinecart implements MinecartInputHandler {
         }
 
         ((EntityAccessor) self).setFirstTick(false);
+    }
+
+    @Inject(method = "moveAlongTrack", at=@At("HEAD"), cancellable = true)
+    public void onMoveAlongTrack(BlockPos pos, BlockState state, CallbackInfo ci){
+        new_minecarts$behavior.moveAlongTrack();
+        ci.cancel();
     }
 
 }
